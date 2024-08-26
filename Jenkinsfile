@@ -6,65 +6,81 @@ pipeline {
     }
 
     stages {
-        stage('Process Projects') {
+        stage('Load and Parse Config') {
             steps {
                 script {
-                    // Read the configuration file
-                    def config = readIniFile file: "${CONFIG_FILE}"
+                    // Read the INI file content
+                    def configText = readFile(CONFIG_FILE)
+                    
+                    // Parse the INI file
+                    def config = parseIniFile(configText)
 
-                    // Loop through each section in the configuration
-                    config.each { sectionName, sectionConfig ->
-                        if (sectionName != "default") {
-                            echo "Processing project: ${sectionName}"
+                    // Print the configuration for debugging
+                    echo "Configuration: ${config}"
 
-                            // Extract environment variables dynamically for each project
-                            def repoUrl = sectionConfig['repo_url']
-                            def branchName = sectionConfig['branch_name']
-                            def pythonFiles = sectionConfig['python_files']
-                            def testCommand = sectionConfig['test_command']
-                            def requirementsFile = sectionConfig['requirements_file']
+                    // Define project settings
+                    def sectionName = 'default' // Example section name
+                    def projectConfig = config[sectionName]
 
-                            // Execute the pipeline stages for this project
-                            stage("Checkout ${sectionName}") {
-                                steps {
-                                    git branch: "${branchName}", url: "${repoUrl}"
-                                }
-                            }
+                    if (!projectConfig) {
+                        error "Configuration for section '${sectionName}' not found in '${CONFIG_FILE}'."
+                    }
 
-                            stage("Set Up Environment for ${sectionName}") {
-                                steps {
-                                    sh '''
-                                    python -m venv venv
-                                    source venv/bin/activate
-                                    pip install -r ${requirementsFile}
-                                    '''
-                                }
-                            }
+                    env.REPO_URL = projectConfig['repo_url']
+                    env.BRANCH_NAME = projectConfig['branch_name']
+                    env.PYTHON_FILES = projectConfig['python_files']
+                    env.TEST_COMMAND = projectConfig['test_command']
+                    env.REQUIREMENTS_FILE = projectConfig['requirements_file']
+                }
+            }
+        }
 
-                            stage("Static Code Analysis for ${sectionName}") {
-                                steps {
-                                    sh "flake8 ${pythonFiles}"
-                                    sh "black --check ${pythonFiles}"
-                                }
-                            }
-
-                            stage("Run Unit Tests for ${sectionName}") {
-                                steps {
-                                    sh '''
-                                    source venv/bin/activate
-                                    ${testCommand}
-                                    '''
-                                }
-                            }
-
-                            stage("Archive Results for ${sectionName}") {
-                                steps {
-                                    junit '**/test-*.xml'
-                                }
-                            }
-                        }
+        stage('Checkout') {
+            steps {
+                script {
+                    if (env.REPO_URL && env.BRANCH_NAME) {
+                        git branch: "${env.BRANCH_NAME}", url: "${env.REPO_URL}"
+                    } else {
+                        error "Repository URL or branch name not set."
                     }
                 }
+            }
+        }
+
+        stage('Set Up Environment') {
+            steps {
+                sh '''
+                python -m venv venv
+                source venv/bin/activate
+                pip install -r ${env.REQUIREMENTS_FILE}
+                '''
+            }
+        }
+
+        stage('Static Code Analysis') {
+            steps {
+                script {
+                    sh "pylint ${env.PYTHON_FILES}"
+                    sh "flake8 ."
+                    sh "black --check ."
+                }
+            }
+        }
+
+        stage('Run Unit Tests') {
+            steps {
+                script {
+                    sh '''
+                    source venv/bin/activate
+                    ${env.TEST_COMMAND}
+                    '''
+                }
+            }
+        }
+
+        stage('Archive Results') {
+            steps {
+                junit '**/test-*.xml'
             }
         }
     }
@@ -74,4 +90,24 @@ pipeline {
             cleanWs()
         }
     }
+}
+
+// Function to parse INI file content
+def parseIniFile(String iniText) {
+    def config = [:]
+    def section = null
+
+    iniText.split('\n').each { line ->
+        line = line.trim()
+
+        if (line.startsWith("[") && line.endsWith("]")) {
+            section = line[1..-2]
+            config[section] = [:]
+        } else if (line && section && line.contains('=')) {
+            def (key, value) = line.split('=', 2).collect { it.trim() }
+            config[section][key] = value
+        }
+    }
+
+    return config
 }
