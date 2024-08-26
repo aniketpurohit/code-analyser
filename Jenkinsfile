@@ -1,5 +1,10 @@
 pipeline {
-    agent any
+    agent {
+        docker {
+            image 'jenkins-agent-python'
+            label 'python-agent'
+        }
+    }
 
     environment {
         CONFIG_FILE = 'config.ini'
