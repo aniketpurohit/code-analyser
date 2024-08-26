@@ -1,9 +1,7 @@
 pipeline {
     agent {
-        docker {
-            image 'jenkins-agent-python'
-            label 'python-agent'
-        }
+        
+        label 'python-agent'
     }
 
     environment {
