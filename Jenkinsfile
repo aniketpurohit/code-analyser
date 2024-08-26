@@ -1,74 +1,70 @@
 pipeline {
     agent any
 
-    parameters {
-        choice(name: 'PROJECT', choices: ['default', 'project1', 'project2', 'staging', 'production'], description: 'Select the project configuration.')
-    }
-
     environment {
         CONFIG_FILE = 'config.ini'
     }
 
     stages {
-        stage('Load Configuration') {
+        stage('Process Projects') {
             steps {
                 script {
+                    // Read the configuration file
                     def config = readIniFile file: "${CONFIG_FILE}"
-                    def projectConfig = config[params.PROJECT]
-                    
-                    if (projectConfig == null) {
-                        error "Configuration for project '${params.PROJECT}' not found in '${CONFIG_FILE}'."
+
+                    // Loop through each section in the configuration
+                    config.each { sectionName, sectionConfig ->
+                        if (sectionName != "default") {
+                            echo "Processing project: ${sectionName}"
+
+                            // Extract environment variables dynamically for each project
+                            def repoUrl = sectionConfig['repo_url']
+                            def branchName = sectionConfig['branch_name']
+                            def pythonFiles = sectionConfig['python_files']
+                            def testCommand = sectionConfig['test_command']
+                            def requirementsFile = sectionConfig['requirements_file']
+
+                            // Execute the pipeline stages for this project
+                            stage("Checkout ${sectionName}") {
+                                steps {
+                                    git branch: "${branchName}", url: "${repoUrl}"
+                                }
+                            }
+
+                            stage("Set Up Environment for ${sectionName}") {
+                                steps {
+                                    sh '''
+                                    python -m venv venv
+                                    source venv/bin/activate
+                                    pip install -r ${requirementsFile}
+                                    '''
+                                }
+                            }
+
+                            stage("Static Code Analysis for ${sectionName}") {
+                                steps {
+                                    sh "flake8 ${pythonFiles}"
+                                    sh "black --check ${pythonFiles}"
+                                }
+                            }
+
+                            stage("Run Unit Tests for ${sectionName}") {
+                                steps {
+                                    sh '''
+                                    source venv/bin/activate
+                                    ${testCommand}
+                                    '''
+                                }
+                            }
+
+                            stage("Archive Results for ${sectionName}") {
+                                steps {
+                                    junit '**/test-*.xml'
+                                }
+                            }
+                        }
                     }
-
-                    env.REPO_URL = projectConfig['repo_url']
-                    env.BRANCH_NAME = projectConfig['branch_name']
-                    env.PYTHON_FILES = projectConfig['python_files']
-                    env.TEST_COMMAND = projectConfig['test_command']
-                    env.REQUIREMENTS_FILE = projectConfig['requirements_file']
                 }
-            }
-        }
-
-        stage('Checkout') {
-            steps {
-                git branch: "${env.BRANCH_NAME}", url: "${env.REPO_URL}"
-            }
-        }
-
-        stage('Set Up Environment') {
-            steps {
-                sh '''
-                python -m venv venv
-                source venv/bin/activate
-                pip install -r ${env.REQUIREMENTS_FILE}
-                '''
-            }
-        }
-
-        stage('Static Code Analysis') {
-            steps {
-                script {
-                    sh "pylint ${env.PYTHON_FILES}"
-                    sh "flake8 ."
-                    sh "black --check ."
-                }
-            }
-        }
-
-        stage('Run Unit Tests') {
-            steps {
-                script {
-                    sh '''
-                    source venv/bin/activate
-                    ${env.TEST_COMMAND}
-                    '''
-                }
-            }
-        }
-
-        stage('Archive Results') {
-            steps {
-                junit '**/test-*.xml'
             }
         }
     }
